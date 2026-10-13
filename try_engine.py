@@ -1,6 +1,9 @@
-
-from ticket_engine import SeatState, SeatUnavailable, TicketHoldEngine
-
+from ticket_engine import (
+    SeatLimitExceeded,
+    SeatState,
+    SeatUnavailable,
+    TicketHoldEngine,
+)
 
 now = [100.0]
 engine = TicketHoldEngine(clock=lambda: now[0])
@@ -38,3 +41,30 @@ engine.release(hold_id)
 assert engine.seat_status("A3").state == SeatState.FREE
 
 print("Confirmation and release checks passed")
+
+now = [100.0]
+engine = TicketHoldEngine(clock=lambda: now[0])
+
+engine.hold("A2", "user-2", 30)
+
+try:
+    engine.hold_many("user-1", ["A1", "A2", "A3"], 30)
+    raise AssertionError("Bulk hold should fail")
+except SeatUnavailable:
+    pass
+
+assert engine.seat_status("A1").state == SeatState.FREE
+assert engine.seat_status("A3").state == SeatState.FREE
+
+engine.hold_many("user-1", ["B1", "B2", "B3"], 30)
+
+try:
+    engine.hold_many("user-1", ["B4", "B5"], 30)
+    raise AssertionError("Four-seat limit should be enforced")
+except SeatLimitExceeded:
+    pass
+
+assert engine.seat_status("B4").state == SeatState.FREE
+assert engine.seat_status("B5").state == SeatState.FREE
+
+print("Bulk hold checks passed")

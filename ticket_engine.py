@@ -213,3 +213,76 @@ class TicketHoldEngine:
                 del self._seat_holds[hold.seat_id]
 
             hold.state = "released"
+
+    
+    def hold_many(
+        self,
+        user_id: str,
+        seat_ids: list[str],
+        ttl_seconds: float,
+    ) -> list[str]:
+        if not user_id or not seat_ids:
+            raise InvalidRequest("user_id and seats are required")
+
+        if ttl_seconds <= 0:
+            raise InvalidRequest("ttl_seconds must be greater than zero")
+
+        if any(not seat for seat in seat_ids):
+            raise InvalidRequest("seat IDs cannot be empty")
+
+        if len(set(seat_ids)) != len(seat_ids):
+            raise InvalidRequest("duplicate seat IDs are not allowed")
+
+        with self._lock:
+            now = self._now()
+            self._expire_all(now)
+
+            existing_ids = {}
+            new_seats = []
+
+            for seat_id in seat_ids:
+                if seat_id in self._sold:
+                    raise SeatUnavailable(f"{seat_id} is already sold")
+
+                current_id = self._seat_holds.get(seat_id)
+
+                if current_id is None:
+                    new_seats.append(seat_id)
+                    continue
+
+                current = self._holds[current_id]
+
+                if current.user_id != user_id:
+                    raise SeatUnavailable(
+                        f"{seat_id} is held by another user"
+                    )
+
+                existing_ids[seat_id] = current_id
+
+            active_count = self._active_count(user_id, now)
+
+            if active_count + len(new_seats) > self._max_holds_per_user:
+                raise SeatLimitExceeded("user has reached the seat limit")
+
+            result = []
+
+            for seat_id in seat_ids:
+                if seat_id in existing_ids:
+                    result.append(existing_ids[seat_id])
+                    continue
+
+                hold_id = str(uuid4())
+                hold = Hold(
+                    hold_id=hold_id,
+                    seat_id=seat_id,
+                    user_id=user_id,
+                    created_at=now,
+                    expires_at=now + float(ttl_seconds),
+                )
+
+                self._holds[hold_id] = hold
+                self._seat_holds[seat_id] = hold_id
+                self._seat_last_hold[seat_id] = hold_id
+                result.append(hold_id)
+
+            return result
